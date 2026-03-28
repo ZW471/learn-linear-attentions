@@ -1,0 +1,48 @@
+[build]
+  command = "pip install flask numpy && python build.py"
+  publish = "_site"
+
+[build.environment]
+  PYTHON_VERSION = "3.12"
+
+# Pretty URLs without .html extension
+[[redirects]]
+  from = "/s4"
+  to = "/s4.html"
+  status = 200
+
+[[redirects]]
+  from = "/mamba1"
+  to = "/mamba1.html"
+  status = 200
+
+[[redirects]]
+  from = "/mamba2"
+  to = "/mamba2.html"
+  status = 200
+
+[[redirects]]
+  from = "/delta"
+  to = "/delta.html"
+  status = 200
+
+# API endpoints -> static JSON files
+[[redirects]]
+  from = "/api/s4/:N/:L"
+  to = "/api/s4/:N/:L.json"
+  status = 200
+
+[[redirects]]
+  from = "/api/mamba1/:L/:D/:N"
+  to = "/api/mamba1/:L/:D/:N.json"
+  status = 200
+
+[[redirects]]
+  from = "/api/mamba2/:T/:N/:P"
+  to = "/api/mamba2/:T/:N/:P.json"
+  status = 200
+
+[[redirects]]
+  from = "/api/delta/:T/:d/:dv"
+  to = "/api/delta/:T/:d/:dv.json"
+  status = 200

@@ -326,7 +326,8 @@ function updateS4Demo() {
     document.getElementById('val-N').textContent = N;
     document.getElementById('val-L').textContent = L;
 
-    fetch(`/api/s4/${N}/${L}`)
+    fetch(`/api/s4/${N}/${L}.json`)
+        .then(r => r.ok ? r : fetch(`/api/s4/${N}/${L}`))
         .then(r => r.json())
         .then(data => renderS4Visualizations(data));
 }
