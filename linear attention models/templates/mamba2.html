@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}Mamba-2 - State Space Duality{% endblock %}
+
+{% block content %}
+<h1>Mamba-2: State Space Duality</h1>
+<p class="subtitle">
+    Transformers are SSMs: Generalized Models and Efficient Algorithms Through Structured State Space Duality<br>
+    <span style="color:var(--text-muted)">Dao, Gu &middot; 2024 &middot; arXiv:2405.21060</span>
+</p>
+
+<!-- ===== Section 1: The Duality ===== -->
+<h2>1. The Key Insight: SSMs = Structured Masked Attention</h2>
+<div class="card">
+    <p>Mamba-2 reveals that SSMs and attention are not different models &mdash; they're <strong>two views of the same matrix computation</strong>.</p>
+
+    <div class="card-grid">
+        <div class="card" style="margin-bottom:0">
+            <h3 style="color:var(--accent-blue)">Linear (Recurrent) Form</h3>
+            <div class="formula-block">
+                $$h_t = a_t \cdot h_{t-1} + B_t \cdot x_t^\top$$
+                $$y_t = C_t^\top \cdot h_t$$
+            </div>
+            <p>Process one token at a time. State $h_t \in \mathbb{R}^{N \times P}$.<br>
+            <strong>Complexity: $O(T \cdot N \cdot P)$</strong></p>
+        </div>
+        <div class="card" style="margin-bottom:0">
+            <h3 style="color:var(--accent-purple)">Quadratic (Attention) Form</h3>
+            <div class="formula-block">
+                $$Y = \underbrace{(L \circ CB^\top)}_{M} \cdot X$$
+            </div>
+            <p>Compute full $T \times T$ matrix, then multiply. Like attention!<br>
+            <strong>Complexity: $O(T^2)$</strong></p>
+        </div>
+    </div>
+
+    <div class="callout insight">
+        <strong>The duality:</strong> Both forms compute the <em>exact same output</em> $Y$. The linear form is better for long sequences; the quadratic form is better for short sequences (it uses fast matrix multiplications). Mamba-2 combines them.
+    </div>
+</div>
+
+<!-- ===== Section 2: The Semiseparable Matrix ===== -->
+<h2>2. The Semiseparable Matrix $M$</h2>
+<div class="card">
+    <p>When we unroll the SSM recurrence, we get a structured matrix $M$ where:</p>
+
+    <div class="formula-block">
+        <span class="label">Semiseparable Matrix</span>
+        $$M_{ij} = C_i^\top \cdot \left(\prod_{k=j+1}^{i} A_k\right) \cdot B_j \quad \text{for } i \geq j, \quad M_{ij} = 0 \text{ for } i < j$$
+    </div>
+
+    <p><strong>Critical restriction in Mamba-2:</strong> $A_t$ is a <strong>scalar</strong> (not a matrix). This allows factoring:</p>
+
+    <div class="formula-block">
+        <span class="label">Factored Form (scalar A)</span>
+        $$M = L \circ (C \cdot B^\top)$$
+    </div>
+
+    <p>Where $L$ is the <strong>1-semiseparable mask</strong> (the "discount factor" matrix):</p>
+
+    <div class="formula-block">
+        <span class="label">1-SS Mask</span>
+        $$L_{ij} = \prod_{k=j+1}^{i} a_k \quad (i \geq j), \qquad L_{ij} = 0 \quad (i < j)$$
+    </div>
+
+    <h3>Visualizing the Factorization: $M = L \circ (CB^\top)$</h3>
+    <div id="factorization-vis"></div>
+
+    <div class="callout info">
+        <strong>Compare to standard attention:</strong> In a Transformer, $M = \text{softmax}(QK^\top / \sqrt{d})$. In Mamba-2, $M = L \circ (CB^\top)$. The structure of $L$ (exponential decay) replaces the softmax, and $C, B$ play the roles of $Q, K$.
+    </div>
+</div>
+
+<!-- ===== Section 3: Three Computation Modes ===== -->
+<h2>3. Three Ways to Compute the Same Thing</h2>
+<div class="card">
+    <div id="tabs-mode" class="tab-group">
+        <button class="tab-btn active" data-tab="tab-quadratic">Quadratic (Attention-like)</button>
+        <button class="tab-btn" data-tab="tab-linear">Linear (Recurrent)</button>
+        <button class="tab-btn" data-tab="tab-chunked">Chunked (Mamba-2 Algorithm)</button>
+    </div>
+
+    <div id="tab-quadratic" class="tab-content active">
+        <div class="formula-block">
+            $$G = C \cdot B^\top \in \mathbb{R}^{T \times T} \quad \text{(like } QK^\top \text{)}$$
+            $$M = L \circ G \quad \text{(apply decay mask)}$$
+            $$Y = M \cdot X \quad \text{(like attention output)}$$
+        </div>
+        <div class="code-block">
+            <span class="lang-label">PyTorch-like</span>
+<pre><span class="kw">def</span> <span class="fn">ssd_quadratic</span>(A, B, C, X):
+    <span class="cm"># A: (T,) scalar, B: (T,N), C: (T,N), X: (T,P)</span>
+    L = build_1ss_mask(A)         <span class="cm"># (T, T) decay mask</span>
+    G = C <span class="op">@</span> B.T                    <span class="cm"># (T, T) like QK^T</span>
+    M = L <span class="op">*</span> G                      <span class="cm"># (T, T) element-wise</span>
+    Y = M <span class="op">@</span> X                      <span class="cm"># (T, P) output</span>
+    <span class="kw">return</span> Y
+</pre>
+        </div>
+        <p><strong>Complexity:</strong> $O(T^2 N + T^2 P)$. Good when $T$ is small.</p>
+    </div>
+
+    <div id="tab-linear" class="tab-content">
+        <div class="formula-block">
+            $$h_t = a_t \cdot h_{t-1} + B_t \otimes X_t \quad \in \mathbb{R}^{N \times P}$$
+            $$y_t = C_t^\top \cdot h_t \quad \in \mathbb{R}^P$$
+        </div>
+        <div class="code-block">
+            <span class="lang-label">PyTorch-like</span>
+<pre><span class="kw">def</span> <span class="fn">ssd_recurrent</span>(A, B, C, X):
+    <span class="cm"># A: (T,) scalar, B: (T,N), C: (T,N), X: (T,P)</span>
+    h = torch.zeros(N, P)          <span class="cm"># state: (N, P)</span>
+    outputs = []
+    <span class="kw">for</span> t <span class="kw">in</span> range(T):
+        h = A[t] <span class="op">*</span> h <span class="op">+</span> torch.outer(B[t], X[t])  <span class="cm"># (N,P)</span>
+        y_t = C[t] <span class="op">@</span> h                            <span class="cm"># (P,)</span>
+        outputs.append(y_t)
+    <span class="kw">return</span> torch.stack(outputs)    <span class="cm"># (T, P)</span>
+</pre>
+        </div>
+        <p><strong>Complexity:</strong> $O(T \cdot N \cdot P)$. Good when $T$ is large.</p>
+    </div>
+
+    <div id="tab-chunked" class="tab-content">
+        <p>Mamba-2's actual algorithm: split the sequence into chunks of size $Q$, use quadratic form <em>within</em> chunks and recurrent form <em>between</em> chunks.</p>
+
+        <div class="formula-block">
+            <span class="label">SSD Chunked Algorithm</span>
+            $$\text{Step 1 (intra-chunk):} \quad Y_{\text{diag}} = (L_c \circ C_c B_c^\top) \cdot X_c \quad \text{(matmul, } O(Q^2) \text{)}$$
+            $$\text{Step 2 (chunk states):} \quad h_c = \sum_{s} \bar{A}_{c,s} \cdot B_s \otimes X_s$$
+            $$\text{Step 3 (inter-chunk):} \quad h_c \leftarrow \bar{a}_c \cdot h_{c-1} + h_c \quad \text{(scan on } T/Q \text{ chunks)}$$
+            $$\text{Step 4 (state &#8594; output):} \quad Y_{\text{off}} = C_c^\top \cdot h_{c-1} \cdot \text{decay}$$
+        </div>
+
+        <div class="code-block">
+            <span class="lang-label">PyTorch-like</span>
+<pre><span class="kw">def</span> <span class="fn">ssd_chunked</span>(A, B, C, X, Q=<span class="num">64</span>):
+    <span class="cm"># Split into chunks of size Q</span>
+    num_chunks = T // Q
+    <span class="cm"># Step 1: Intra-chunk (quadratic, uses tensor cores)</span>
+    <span class="kw">for</span> c <span class="kw">in</span> range(num_chunks):
+        L_c = build_1ss_mask(A[c<span class="op">*</span>Q:(c<span class="op">+</span><span class="num">1</span>)<span class="op">*</span>Q])          <span class="cm"># (Q, Q)</span>
+        M_c = L_c <span class="op">*</span> (C_c <span class="op">@</span> B_c.T)                       <span class="cm"># (Q, Q) matmul!</span>
+        Y_intra[c] = M_c <span class="op">@</span> X_c                          <span class="cm"># (Q, P) matmul!</span>
+
+    <span class="cm"># Step 2-3: Inter-chunk state passing (parallel scan)</span>
+    states = parallel_scan(chunk_states, decay_per_chunk)
+
+    <span class="cm"># Step 4: Add inter-chunk contribution</span>
+    Y = Y_intra <span class="op">+</span> state_contribution
+    <span class="kw">return</span> Y
+</pre>
+        </div>
+        <p><strong>Complexity:</strong> $O(TN + T^2/Q)$. Steps 1,2,4 are matmul-dominated (use tensor cores, up to 16x faster than non-matmul FLOPs). Step 3 is a scan on only $T/Q$ elements.</p>
+    </div>
+</div>
+
+<!-- ===== Section 3b: Code Execution Walkthrough ===== -->
+<h2>3b. Code Execution: SSD Quadratic Form</h2>
+<div class="card">
+    <p>Step through the SSD quadratic (attention-like) computation <strong>line by line</strong>. See how M = L &#8857; (CB&#8868;) is built and applied.</p>
+    <div id="mamba2-executor"></div>
+</div>
+
+<!-- ===== Section 4: Verification ===== -->
+<h2>4. All Three Give the Same Answer</h2>
+<div class="card">
+    <div id="verify-plot" class="plot-container"></div>
+    <p id="verify-diff" style="font-family:var(--font-mono);color:var(--accent-green)"></p>
+</div>
+
+<!-- ===== Section 5: Step-by-Step ===== -->
+<h2>5. Step-by-Step: Chunked SSD</h2>
+<div class="card">
+    <div id="chunk-stepper"></div>
+</div>
+
+<!-- ===== Section 6: Differences from Mamba-1 ===== -->
+<h2>6. Mamba-2 vs Mamba-1</h2>
+<div class="card">
+    <table class="compare-table">
+        <thead>
+            <tr><th>Property</th><th>Mamba-1</th><th>Mamba-2</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>$A$ structure</strong></td>
+                <td>Diagonal $A \in \mathbb{R}^{D \times N}$</td>
+                <td>Scalar $A \in \mathbb{R}$ (per timestep)</td>
+            </tr>
+            <tr>
+                <td><strong>Head dimension</strong></td>
+                <td>$P = 1$ (independent SSMs per channel)</td>
+                <td>$P \gg 1$ (shared dynamics across channels in a head)</td>
+            </tr>
+            <tr>
+                <td><strong>State dimension</strong></td>
+                <td>Typically $N = 16$</td>
+                <td>$N = 64$ to $256$ (can be larger due to efficiency)</td>
+            </tr>
+            <tr>
+                <td><strong>Computation</strong></td>
+                <td>Parallel scan (memory-bound)</td>
+                <td>Chunked matmul + scan (compute-bound, uses tensor cores)</td>
+            </tr>
+            <tr>
+                <td><strong>Speed</strong></td>
+                <td>Baseline</td>
+                <td>2&ndash;8&times; faster</td>
+            </tr>
+            <tr>
+                <td><strong>Parameter generation</strong></td>
+                <td>Sequential (B,C from conv output)</td>
+                <td>Parallel (B,C generated alongside X)</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const demo = {{ demo|safe }};
+const execSteps = {{ exec_steps|safe }};
+
+document.addEventListener('DOMContentLoaded', () => {
+    initTabs('tabs-mode');
+    new CodeExecutor('mamba2-executor', execSteps);
+
+    // Factorization visualization
+    renderMatrixEquation('factorization-vis', [
+        {type: 'matrix', data: demo.quadratic_intermediates.M, label: `M (${demo.T}×${demo.T})`},
+        {type: 'operator', symbol: '='},
+        {type: 'matrix', data: demo.quadratic_intermediates.L, label: `L (1-SS mask)`},
+        {type: 'operator', symbol: '⊙'},
+        {type: 'matrix', data: demo.quadratic_intermediates.CB, label: `CB⊤ (${demo.T}×${demo.T})`},
+    ]);
+
+    // Verification plot
+    const traces = [];
+    for (let p = 0; p < demo.P; p++) {
+        traces.push({y: demo.Y_quadratic.map(r => r[p]), name: `Quadratic p=${p}`});
+        traces.push({y: demo.Y_recurrent.map(r => r[p]), name: `Recurrent p=${p}`, mode: 'markers'});
+        traces.push({y: demo.Y_chunked.map(r => r[p]), name: `Chunked p=${p}`, mode: 'lines'});
+    }
+    plotLines('verify-plot', traces, 'Three computation modes produce identical output', 'Time t', 'Y value');
+
+    document.getElementById('verify-diff').textContent =
+        `Max |quadratic - recurrent| = ${demo.max_diff_quad_rec.toExponential(2)}, ` +
+        `Max |quadratic - chunked| = ${demo.max_diff_quad_chunk.toExponential(2)}`;
+
+    // Chunk stepper
+    const chunkSteps = demo.chunk_info.map((ci, idx) => ({
+        title: `Chunk ${idx}: positions ${idx*4}–${idx*4+3}`,
+        description: `Intra-chunk: compute local ${4}×${4} attention matrix M_c = L_c ⊙ (C_c B_c⊤). ` +
+            `State norm: ${ci.chunk_state_norm.toFixed(4)}. ` +
+            `Inter-chunk: propagate decayed state from previous chunks.`,
+        render: (div) => {
+            const id = `chunk-m-${idx}`;
+            const el = document.createElement('div');
+            el.id = id;
+            div.appendChild(el);
+            renderMatrixEquation(id, [
+                {type: 'matrix', data: ci.M_chunk, label: `M_chunk_${idx} (4×4)`},
+                {type: 'operator', symbol: '·'},
+                {type: 'text', text: `X_chunk → Y_intra`},
+            ]);
+        }
+    }));
+    stepAnimators['chunk-stepper'] = new StepAnimator('chunk-stepper', chunkSteps);
+});
+</script>
+{% endblock %}

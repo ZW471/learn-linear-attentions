@@ -1,0 +1,334 @@
+{% extends "base.html" %}
+{% block title %}S4 - Structured State Spaces{% endblock %}
+
+{% block content %}
+<h1>S4: Structured State Spaces</h1>
+<p class="subtitle">
+    Efficiently Modeling Long Sequences with Structured State Spaces<br>
+    <span style="color:var(--text-muted)">Gu, Goel, Re &middot; ICLR 2022 &middot; arXiv:2111.00396</span>
+</p>
+
+<!-- ===== Section 1: Overview ===== -->
+<h2>1. The Big Idea</h2>
+<div class="card">
+    <p>S4 models sequences by mapping them through a <strong>continuous-time state space model</strong>, then discretizing it for computation. The key breakthrough is making this efficient using the <strong>HiPPO matrix</strong> and <strong>structured matrix decompositions</strong>.</p>
+
+    <div class="callout info">
+        <strong>If you know Transformers:</strong> Think of S4 as replacing the $T \times T$ attention matrix with a fixed-size $N$-dimensional hidden state that compresses the entire history. During training, this state is computed as a convolution (parallelizable). During inference, it's a recurrence (constant time per token).
+    </div>
+
+    <h3>Data Flow Overview</h3>
+    <div id="s4-flow"></div>
+</div>
+
+<!-- ===== Section 2: Continuous-Time SSM ===== -->
+<h2>2. Continuous-Time State Space Model</h2>
+<div class="card">
+    <p>The starting point is a continuous-time linear system with state $x(t) \in \mathbb{R}^N$:</p>
+
+    <div class="formula-block">
+        <span class="label">Continuous SSM</span>
+        $$x'(t) = Ax(t) + Bu(t)$$
+        $$y(t) = Cx(t) + Du(t)$$
+    </div>
+
+    <div style="margin:1rem 0">
+        <span class="shape-badge">A</span> $\in \mathbb{R}^{N \times N}$ &mdash; state transition matrix (how state evolves)<br>
+        <span class="shape-badge green">B</span> $\in \mathbb{R}^{N \times 1}$ &mdash; input projection (how input enters state)<br>
+        <span class="shape-badge purple">C</span> $\in \mathbb{R}^{1 \times N}$ &mdash; output projection (how to read from state)<br>
+        <span class="shape-badge orange">D</span> $\in \mathbb{R}$ &mdash; skip connection (direct input-to-output)
+    </div>
+
+    <div class="code-block">
+        <span class="lang-label">PyTorch-like</span>
+<pre><span class="cm"># Continuous-time SSM (conceptual)</span>
+<span class="kw">class</span> <span class="type">ContinuousSSM</span>:
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, N):
+        self.A = nn.Parameter(torch.randn(N, N))  <span class="cm"># (N, N)</span>
+        self.B = nn.Parameter(torch.randn(N, <span class="num">1</span>))  <span class="cm"># (N, 1)</span>
+        self.C = nn.Parameter(torch.randn(<span class="num">1</span>, N))  <span class="cm"># (1, N)</span>
+        self.D = nn.Parameter(torch.zeros(<span class="num">1</span>))     <span class="cm"># (1,)</span>
+
+    <span class="cm"># x'(t) = A @ x(t) + B * u(t)</span>
+    <span class="cm"># y(t)  = C @ x(t) + D * u(t)</span>
+</pre>
+    </div>
+
+    <div class="callout insight">
+        <strong>Analogy:</strong> In a Transformer, the "state" is the full sequence of past key-value pairs ($O(T)$ memory). In an SSM, the state is a <em>fixed</em> $N$-dimensional vector ($O(N)$ memory, typically $N = 64$), no matter how long the sequence.
+    </div>
+</div>
+
+<!-- ===== Section 3: HiPPO Matrix ===== -->
+<h2>3. The HiPPO Matrix</h2>
+<div class="card">
+    <p>The matrix $A$ is initialized with the <strong>HiPPO-LegS</strong> (High-Order Polynomial Projection Operator, Legendre Shifted) matrix. This is the key to S4's ability to model long-range dependencies.</p>
+
+    <div class="formula-block">
+        <span class="label">HiPPO-LegS</span>
+        $$A_{nk} = -\begin{cases}
+            \sqrt{2n+1}\sqrt{2k+1} & \text{if } n > k \\
+            n+1 & \text{if } n = k \\
+            0 & \text{if } n < k
+        \end{cases}$$
+        $$B_n = \sqrt{2n+1}$$
+    </div>
+
+    <p>The HiPPO matrix makes the hidden state $x(t)$ track the <em>coefficients of a Legendre polynomial approximation</em> of the input history. Each state dimension remembers a different polynomial basis function.</p>
+
+    <h3>HiPPO Matrix Visualization (N=4)</h3>
+    <div id="hippo-matrix-vis"></div>
+
+    <div class="callout info">
+        <strong>Why Legendre polynomials?</strong> They form an orthonormal basis that can approximate any function over $[0, t]$. As $N$ increases, the approximation improves. With $N = 64$, the state can accurately recall sequences thousands of steps long.
+    </div>
+</div>
+
+<!-- ===== Section 4: Discretization ===== -->
+<h2>4. Discretization: From Continuous to Discrete</h2>
+<div class="card">
+    <p>Real sequences are discrete (token-by-token), so we discretize with step size $\Delta > 0$ using the <strong>bilinear method</strong> (Tustin's method):</p>
+
+    <div class="formula-block">
+        <span class="label">Bilinear Discretization</span>
+        $$\bar{A} = \left(I - \frac{\Delta}{2}A\right)^{-1}\left(I + \frac{\Delta}{2}A\right)$$
+        $$\bar{B} = \left(I - \frac{\Delta}{2}A\right)^{-1} \Delta B$$
+        $$\bar{C} = C$$
+    </div>
+
+    <div class="code-block">
+        <span class="lang-label">PyTorch-like</span>
+<pre><span class="cm"># Bilinear discretization</span>
+<span class="kw">def</span> <span class="fn">discretize_bilinear</span>(A, B, C, delta):
+    <span class="cm"># A: (N, N), B: (N, 1), delta: scalar</span>
+    I = torch.eye(A.shape[<span class="num">0</span>])
+    inv = torch.linalg.inv(I <span class="op">-</span> (delta / <span class="num">2</span>) <span class="op">*</span> A)  <span class="cm"># (N, N)</span>
+    A_bar = inv <span class="op">@</span> (I <span class="op">+</span> (delta / <span class="num">2</span>) <span class="op">*</span> A)               <span class="cm"># (N, N)</span>
+    B_bar = inv <span class="op">@</span> (delta <span class="op">*</span> B)                          <span class="cm"># (N, 1)</span>
+    <span class="kw">return</span> A_bar, B_bar, C
+</pre>
+    </div>
+
+    <p>$\Delta$ controls the "resolution" &mdash; how much continuous time one discrete step corresponds to. Small $\Delta$ = fine-grained, large $\Delta$ = coarse.</p>
+
+    <h3>Interactive: Discretized Matrices</h3>
+    <div id="discretized-vis"></div>
+</div>
+
+<!-- ===== Section 5: Dual Computation ===== -->
+<h2>5. The Duality: Recurrence vs Convolution</h2>
+
+<div class="card">
+    <div id="tabs-mode" class="tab-group">
+        <button class="tab-btn active" data-tab="tab-recurrent">Recurrent (RNN) Mode</button>
+        <button class="tab-btn" data-tab="tab-convolution">Convolution (CNN) Mode</button>
+    </div>
+
+    <div id="tab-recurrent" class="tab-content active">
+        <p>Process tokens <strong>one at a time</strong>, maintaining state. Best for <strong>inference</strong>.</p>
+
+        <div class="formula-block">
+            <span class="label">Recurrence</span>
+            $$x_k = \bar{A}\,x_{k-1} + \bar{B}\,u_k \qquad y_k = \bar{C}\,x_k$$
+        </div>
+
+        <div class="code-block">
+            <span class="lang-label">PyTorch-like</span>
+<pre><span class="cm"># Recurrent mode: O(L*N^2) sequential, O(N) memory</span>
+<span class="kw">def</span> <span class="fn">ssm_recurrent</span>(A_bar, B_bar, C_bar, u):
+    <span class="cm"># u: (L,) input sequence</span>
+    <span class="cm"># x: (N,) hidden state</span>
+    x = torch.zeros(N)             <span class="cm"># (N,)</span>
+    outputs = []
+    <span class="kw">for</span> k <span class="kw">in</span> range(L):
+        x = A_bar <span class="op">@</span> x <span class="op">+</span> B_bar.squeeze() <span class="op">*</span> u[k]  <span class="cm"># (N,)</span>
+        y_k = C_bar <span class="op">@</span> x                           <span class="cm"># (1,)</span>
+        outputs.append(y_k)
+    <span class="kw">return</span> torch.stack(outputs)     <span class="cm"># (L,)</span>
+</pre>
+        </div>
+
+        <h3>Step-by-Step Recurrence</h3>
+        <div id="recurrent-stepper"></div>
+    </div>
+
+    <div id="tab-convolution" class="tab-content">
+        <p>Compute the entire output <strong>in parallel</strong> via convolution. Best for <strong>training</strong>.</p>
+
+        <div class="formula-block">
+            <span class="label">Convolution Kernel</span>
+            $$\bar{K} = (\bar{C}\bar{B},\; \bar{C}\bar{A}\bar{B},\; \bar{C}\bar{A}^2\bar{B},\; \ldots,\; \bar{C}\bar{A}^{L-1}\bar{B}) \in \mathbb{R}^L$$
+            $$y = \bar{K} * u \quad \text{(computed via FFT)}$$
+        </div>
+
+        <div class="code-block">
+            <span class="lang-label">PyTorch-like</span>
+<pre><span class="cm"># Convolution mode: O(L log L) parallel via FFT</span>
+<span class="kw">def</span> <span class="fn">ssm_convolution</span>(A_bar, B_bar, C_bar, u, L):
+    <span class="cm"># Build kernel: K[i] = C_bar @ A_bar^i @ B_bar</span>
+    K = torch.zeros(L)
+    A_power = torch.eye(N)          <span class="cm"># A^0 = I</span>
+    <span class="kw">for</span> i <span class="kw">in</span> range(L):
+        K[i] = C_bar <span class="op">@</span> A_power <span class="op">@</span> B_bar  <span class="cm"># scalar</span>
+        A_power = A_power <span class="op">@</span> A_bar       <span class="cm"># (N, N)</span>
+
+    <span class="cm"># Convolve via FFT: O(L log L)</span>
+    y = torch.fft.irfft(
+        torch.fft.rfft(K, n=<span class="num">2</span><span class="op">*</span>L) <span class="op">*</span> torch.fft.rfft(u, n=<span class="num">2</span><span class="op">*</span>L)
+    )[:L]
+    <span class="kw">return</span> y  <span class="cm"># (L,)</span>
+</pre>
+        </div>
+
+        <h3>Kernel &amp; Convolution Visualization</h3>
+        <div id="conv-kernel-plot" class="plot-container"></div>
+        <div id="conv-output-plot" class="plot-container"></div>
+    </div>
+</div>
+
+<!-- ===== Section 6: NPLR/DPLR ===== -->
+<h2>6. Efficient Computation: NPLR &amp; DPLR</h2>
+<div class="card">
+    <p>Naively computing the convolution kernel $\bar{K}$ requires $L$ matrix powers of $\bar{A}$, which is $O(LN^2)$. S4 avoids this by exploiting the structure of the HiPPO matrix.</p>
+
+    <h3>Normal Plus Low-Rank (NPLR)</h3>
+    <div class="formula-block">
+        <span class="label">NPLR Decomposition</span>
+        $$A = V\Lambda V^* - PQ^\top$$
+    </div>
+    <p>Where $V \in \mathbb{C}^{N \times N}$ is unitary, $\Lambda$ is diagonal, and $P, Q \in \mathbb{R}^{N \times r}$ are low-rank factors (typically $r = 1$ or $2$).</p>
+
+    <h3>Diagonal Plus Low-Rank (DPLR)</h3>
+    <div class="formula-block">
+        <span class="label">DPLR (in conjugated basis)</span>
+        $$A = \Lambda - PQ^* \quad \text{where } \Lambda \text{ is diagonal}$$
+    </div>
+
+    <p>In DPLR form, the generating function for the kernel reduces to a <strong>Cauchy kernel</strong>:</p>
+
+    <div class="formula-block">
+        <span class="label">Cauchy Kernel</span>
+        $$\hat{K}(\omega) \propto \sum_i \frac{\tilde{C}_i \tilde{B}_i}{\omega - \Lambda_i}$$
+    </div>
+
+    <p>This can be computed in $\tilde{O}(N + L)$ time using fast Cauchy matrix algorithms, making S4 efficient for very long sequences.</p>
+
+    <div class="callout insight">
+        <strong>The efficiency pipeline:</strong> HiPPO matrix &#8594; NPLR decomposition &#8594; conjugate to DPLR &#8594; kernel via Cauchy product &#8594; output via FFT. Total: $O((N + L) \log^2(N + L))$.
+    </div>
+</div>
+
+<!-- ===== Section 7: Code Execution Walkthrough ===== -->
+<h2>7. Code Execution Walkthrough</h2>
+<div class="card">
+    <p>Step through the SSM recurrence <strong>line by line</strong>. Watch each tensor get computed in real-time with actual values.</p>
+    <div id="s4-executor"></div>
+</div>
+
+<!-- ===== Section 8: Live Demo ===== -->
+<h2>8. Interactive Demo</h2>
+<div class="card">
+    <div class="param-controls">
+        <div class="param-group">
+            <label>State dim N:</label>
+            <input type="range" id="param-N" min="2" max="8" value="4" oninput="updateS4Demo()">
+            <span class="param-value" id="val-N">4</span>
+        </div>
+        <div class="param-group">
+            <label>Seq length L:</label>
+            <input type="range" id="param-L" min="8" max="32" value="16" oninput="updateS4Demo()">
+            <span class="param-value" id="val-L">16</span>
+        </div>
+    </div>
+
+    <div id="demo-io-plot" class="plot-container"></div>
+    <div id="demo-state-plot" class="plot-container"></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const demoData = {{ demo|safe }};
+const execSteps = {{ exec_steps|safe }};
+
+document.addEventListener('DOMContentLoaded', () => {
+    initTabs('tabs-mode');
+    renderS4Visualizations(demoData);
+    new CodeExecutor('s4-executor', execSteps);
+});
+
+function renderS4Visualizations(data) {
+    // Flow diagram
+    renderFlowDiagram('s4-flow', [
+        {name: 'u(t)', shape: `(${data.L},)`},
+        {name: 'Discretize', shape: `Δ=${data.delta}`},
+        {name: 'x_k = Āx + B̄u', shape: `(${data.N},)`},
+        {name: 'y_k = C̄x_k', shape: `(${data.L},)`},
+    ]);
+
+    // HiPPO matrix
+    renderMatrix('hippo-matrix-vis', data.A_continuous,
+        `HiPPO-LegS A (${data.N}×${data.N})`);
+
+    // Discretized matrices
+    renderMatrixEquation('discretized-vis', [
+        {type: 'matrix', data: data.A_bar, label: `Ā (${data.N}×${data.N})`},
+        {type: 'text', text: '×'},
+        {type: 'matrix', data: data.B_bar, label: `B̄ (${data.N}×1)`},
+    ]);
+
+    // Step-by-step recurrence
+    const steps = [];
+    for (let k = 0; k < data.L; k++) {
+        steps.push({
+            title: `Step k=${k}: x_${k} = Ā·x_${k > 0 ? k-1 : '0'} + B̄·u_${k}`,
+            description: `Input u[${k}] = ${data.input_u[k].toFixed(3)}. State x[${k}] has ${data.N} dimensions. Output y[${k}] = C̄·x[${k}] = ${data.output_recurrent[k].toFixed(4)}.`,
+            render: (div) => {
+                const stateDiv = document.createElement('div');
+                stateDiv.id = `state-step-${k}`;
+                div.appendChild(stateDiv);
+                renderMatrix(stateDiv.id, [data.state_history[k]], `x_${k} state (1×${data.N})`);
+            }
+        });
+    }
+    stepAnimators['recurrent-stepper'] = new StepAnimator('recurrent-stepper', steps);
+
+    // Convolution kernel plot
+    plotLines('conv-kernel-plot', [
+        {y: data.kernel_K, name: 'Kernel K̄'}
+    ], 'SSM Convolution Kernel K̄', 'Position i', 'K̄[i] = C̄·Ā^i·B̄');
+
+    // Input / Output comparison
+    plotLines('conv-output-plot', [
+        {y: data.input_u, name: 'Input u'},
+        {y: data.output_convolution, name: 'Output y (conv)'},
+        {y: data.output_recurrent, name: 'Output y (recurrence)'},
+    ], 'Recurrence vs Convolution (identical outputs)', 'Time step k', 'Value');
+
+    // Demo plots
+    plotLines('demo-io-plot', [
+        {y: data.input_u, name: 'Input u(t)'},
+        {y: data.output_recurrent, name: 'Output y(t)'},
+    ], 'Input → SSM → Output', 'Time step', 'Value');
+
+    plotHeatmap('demo-state-plot',
+        data.state_history,
+        `Hidden State Evolution x_k (${data.L} steps × ${data.N} dims)`,
+        Array.from({length: data.N}, (_, i) => `dim ${i}`),
+        Array.from({length: data.L}, (_, i) => `t=${i}`)
+    );
+}
+
+function updateS4Demo() {
+    const N = parseInt(document.getElementById('param-N').value);
+    const L = parseInt(document.getElementById('param-L').value);
+    document.getElementById('val-N').textContent = N;
+    document.getElementById('val-L').textContent = L;
+
+    fetch(`/api/s4/${N}/${L}`)
+        .then(r => r.json())
+        .then(data => renderS4Visualizations(data));
+}
+</script>
+{% endblock %}

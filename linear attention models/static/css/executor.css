@@ -1,0 +1,459 @@
+/* ===== Code Executor Component ===== */
+.executor {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--bg-secondary);
+    margin: 1.5rem 0;
+}
+
+/* Layout: code left, tensors right */
+.executor-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    min-height: 420px;
+    max-height: 600px;
+}
+
+@media (max-width: 900px) {
+    .executor-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Panel headers */
+.executor-panel-header {
+    padding: 0.6rem 1rem;
+    background: var(--bg-code);
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.panel-icon {
+    font-size: 1rem;
+    opacity: 0.6;
+}
+
+/* ===== Code Panel ===== */
+.executor-code-panel {
+    border-right: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.executor-code-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem 0;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    line-height: 1.7;
+    background: var(--bg-code);
+}
+
+/* Code lines */
+.code-line {
+    display: flex;
+    align-items: flex-start;
+    padding: 1px 0.75rem;
+    transition: background 0.3s, border-color 0.3s;
+    border-left: 3px solid transparent;
+    position: relative;
+    cursor: default;
+}
+
+.code-line:hover {
+    background: rgba(96, 165, 250, 0.03);
+}
+
+.code-line.active {
+    background: rgba(96, 165, 250, 0.12);
+    border-left-color: var(--accent-blue);
+}
+
+.code-line.active::before {
+    content: '▶';
+    position: absolute;
+    left: -1px;
+    color: var(--accent-blue);
+    font-size: 0.6rem;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
+.code-line.executed {
+    background: rgba(74, 222, 128, 0.05);
+    border-left-color: rgba(74, 222, 128, 0.3);
+}
+
+.code-line.next {
+    background: rgba(167, 139, 250, 0.05);
+    border-left-color: rgba(167, 139, 250, 0.2);
+}
+
+.code-line-num {
+    min-width: 28px;
+    text-align: right;
+    color: var(--text-muted);
+    user-select: none;
+    padding-right: 0.75rem;
+    font-size: 0.75rem;
+    opacity: 0.5;
+    flex-shrink: 0;
+}
+
+.code-line-content {
+    flex: 1;
+    white-space: pre;
+    color: var(--text-primary);
+}
+
+.code-line-comment {
+    color: var(--text-muted);
+    font-style: italic;
+    white-space: pre;
+    opacity: 0.7;
+}
+
+/* Syntax highlighting */
+.hl-kw { color: var(--accent-purple); font-weight: 500; }
+.hl-fn { color: var(--accent-blue); }
+.hl-cm { color: var(--text-muted); font-style: italic; }
+.hl-str { color: var(--accent-green); }
+.hl-num { color: var(--accent-orange); }
+.hl-op { color: var(--accent-cyan); }
+.hl-mod { color: var(--accent-yellow); }
+
+/* ===== Tensor Panel ===== */
+.executor-tensor-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.executor-tensor-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.tensor-placeholder {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 3rem 1rem;
+    opacity: 0.6;
+}
+
+/* Tensor cards */
+.tensor-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 0.8rem;
+    transition: all 0.3s;
+}
+
+.tensor-card.just-computed {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 12px rgba(96, 165, 250, 0.15);
+    animation: tensorPulse 0.5s ease-out;
+}
+
+.tensor-card.highlight {
+    border-color: var(--accent-green);
+    background: rgba(74, 222, 128, 0.05);
+}
+
+@keyframes tensorPulse {
+    0% { transform: scale(1.01); box-shadow: 0 0 20px rgba(96, 165, 250, 0.3); }
+    100% { transform: scale(1); box-shadow: 0 0 12px rgba(96, 165, 250, 0.15); }
+}
+
+.tensor-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.4rem;
+}
+
+.tensor-name {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.tensor-shape-badge {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid;
+    border-radius: 4px;
+    background: rgba(96, 165, 250, 0.08);
+}
+
+/* Tensor values */
+.tensor-value {
+    overflow-x: auto;
+    margin: 0.3rem 0;
+}
+
+.tensor-scalar {
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--accent-blue);
+    padding: 0.2rem 0.5rem;
+    background: rgba(96, 165, 250, 0.08);
+    border-radius: 4px;
+}
+
+/* Matrix display */
+.tensor-matrix {
+    border-collapse: collapse;
+    width: auto;
+}
+
+.tensor-matrix td {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    padding: 3px 6px;
+    text-align: center;
+    border: 1px solid rgba(45, 50, 90, 0.4);
+    color: var(--text-primary);
+    min-width: 44px;
+    transition: all 0.3s;
+    white-space: nowrap;
+}
+
+.tensor-matrix td.cell-highlight {
+    outline: 2px solid var(--accent-yellow);
+    outline-offset: -2px;
+    font-weight: 700;
+    z-index: 1;
+    position: relative;
+}
+
+/* Vector display */
+.tensor-vector {
+    display: flex;
+    gap: 2px;
+    flex-wrap: wrap;
+}
+
+.vector-cell {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    padding: 3px 6px;
+    border-radius: 3px;
+    border: 1px solid rgba(45, 50, 90, 0.4);
+    color: var(--text-primary);
+    transition: all 0.3s;
+    min-width: 48px;
+    text-align: center;
+}
+
+.vector-cell.cell-highlight {
+    outline: 2px solid var(--accent-yellow);
+    font-weight: 700;
+}
+
+/* Tensor annotation */
+.tensor-annotation {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.3rem;
+    padding-top: 0.3rem;
+    border-top: 1px solid rgba(45, 50, 90, 0.3);
+    line-height: 1.5;
+}
+
+/* ===== Description Bar ===== */
+.executor-desc {
+    padding: 0.75rem 1rem;
+    background: rgba(96, 165, 250, 0.06);
+    border-top: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.88rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.desc-step {
+    color: var(--accent-blue);
+    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+}
+
+.desc-icon {
+    color: var(--accent-blue);
+}
+
+/* ===== Controls ===== */
+.executor-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    background: var(--bg-code);
+    flex-wrap: wrap;
+}
+
+.exec-btn {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: var(--font-sans);
+    white-space: nowrap;
+}
+
+.exec-btn:hover {
+    border-color: var(--accent-blue);
+    background: rgba(96, 165, 250, 0.1);
+}
+
+.exec-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.exec-btn.primary {
+    background: var(--accent-blue);
+    color: #000;
+    border-color: var(--accent-blue);
+    font-weight: 600;
+}
+
+.exec-btn.primary:hover {
+    background: #7db8fc;
+}
+
+.exec-speed-group {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: 0.5rem;
+}
+
+.exec-speed-group label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.exec-speed-group input[type="range"] {
+    width: 80px;
+    accent-color: var(--accent-blue);
+}
+
+.exec-step-label {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-left: auto;
+}
+
+/* Progress bar */
+.exec-progress-bar {
+    height: 3px;
+    background: var(--bg-code);
+    overflow: hidden;
+}
+
+.exec-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    transition: width 0.3s;
+    width: 0;
+}
+
+/* ===== Tensor Flow Diagram ===== */
+.tensor-flow {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 1rem 0;
+    overflow-x: auto;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.tf-node {
+    background: var(--bg-card);
+    border: 1.5px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.75rem;
+    text-align: center;
+    min-width: 80px;
+    transition: all 0.3s;
+    flex-shrink: 0;
+}
+
+.tf-node.tf-active {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 15px rgba(96, 165, 250, 0.2);
+    transform: scale(1.02);
+}
+
+.tf-node.tf-computed {
+    border-color: var(--accent-green);
+    background: rgba(74, 222, 128, 0.05);
+}
+
+.tf-name {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.tf-shape {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--accent-blue);
+    margin-top: 0.15rem;
+}
+
+.tf-value {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    color: var(--accent-green);
+    margin-top: 0.15rem;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tf-operation {
+    font-size: 0.65rem;
+    color: var(--accent-purple);
+    margin-top: 0.15rem;
+    font-style: italic;
+}
+
+.tf-arrow {
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    padding: 0 0.15rem;
+}

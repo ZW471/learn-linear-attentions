@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block title %}Linear Attention Models - Overview{% endblock %}
+
+{% block content %}
+<h1>Linear Attention Models</h1>
+<p class="subtitle">An interactive guide from standard Transformers to S4, Mamba, and DeltaNet &mdash; with step-by-step tensor computations.</p>
+
+<!-- ===== Why Linear Attention? ===== -->
+<h2>Why Move Beyond Standard Attention?</h2>
+
+<div class="card">
+    <p>In a standard Transformer, self-attention computes:</p>
+    <div class="formula-block">
+        <span class="label">Standard Attention</span>
+        $$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V$$
+    </div>
+    <p>
+        This requires materializing a <span class="shape-badge">T &times; T</span> attention matrix, making it
+        <strong>$O(T^2)$</strong> in both time and memory. For a sequence of length $T = 100{,}000$, that matrix
+        has <strong>10 billion</strong> entries &mdash; far too large.
+    </p>
+    <div class="callout info">
+        <strong>The goal of linear attention models:</strong> Replace the $O(T^2)$ attention with $O(T)$
+        mechanisms that still capture long-range dependencies. Each model in this guide takes a different approach.
+    </div>
+</div>
+
+<!-- ===== Comparison Table ===== -->
+<h2>Model Comparison at a Glance</h2>
+
+<div class="card" style="overflow-x:auto">
+    <table class="compare-table">
+        <thead>
+            <tr>
+                <th>Property</th>
+                <th>Standard Transformer</th>
+                <th>S4 (2021)</th>
+                <th>Mamba-1 (2023)</th>
+                <th>Mamba-2 (2024)</th>
+                <th>DeltaNet</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Core Mechanism</strong></td>
+                <td>Softmax attention</td>
+                <td>State Space Model (SSM)</td>
+                <td>Selective SSM</td>
+                <td>State Space Duality (SSD)</td>
+                <td>Delta-rule linear attention</td>
+            </tr>
+            <tr>
+                <td><strong>Time Complexity</strong></td>
+                <td>$O(T^2 d)$</td>
+                <td>$O(T \log T)$ via FFT</td>
+                <td>$O(T \cdot N \cdot D)$</td>
+                <td>$O(TN + T^2/Q)$</td>
+                <td>$O(T \cdot d^2)$</td>
+            </tr>
+            <tr>
+                <td><strong>State Size</strong></td>
+                <td>Full $T \times T$ matrix</td>
+                <td>Fixed $N$-dim state</td>
+                <td>Fixed $N$-dim state</td>
+                <td>$(N, P)$ per head</td>
+                <td>$(d_v, d)$ memory matrix</td>
+            </tr>
+            <tr>
+                <td><strong>Input-Dependent?</strong></td>
+                <td>Yes (Q, K, V from input)</td>
+                <td>No (A, B, C fixed after training)</td>
+                <td>Yes (B, C, &Delta; from input)</td>
+                <td>Yes (B, C, A from input)</td>
+                <td>Yes (Q, K, V, &beta; from input)</td>
+            </tr>
+            <tr>
+                <td><strong>Parallel Training</strong></td>
+                <td>Fully parallel</td>
+                <td>Convolution (parallel)</td>
+                <td>Parallel scan</td>
+                <td>Chunked matmul + scan</td>
+                <td>Chunkwise parallel</td>
+            </tr>
+            <tr>
+                <td><strong>Sequential Inference</strong></td>
+                <td>$O(T)$ per token (KV cache)</td>
+                <td>$O(1)$ per token (recurrence)</td>
+                <td>$O(1)$ per token (recurrence)</td>
+                <td>$O(1)$ per token (recurrence)</td>
+                <td>$O(1)$ per token (recurrence)</td>
+            </tr>
+            <tr>
+                <td><strong>Key Insight</strong></td>
+                <td>Content-based retrieval</td>
+                <td>HiPPO + structured matrices</td>
+                <td>Selectivity (data-dependent gating)</td>
+                <td>SSM = structured masked attention</td>
+                <td>Erase-then-write memory updates</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- ===== The Big Picture ===== -->
+<h2>The Evolution: A Visual Timeline</h2>
+<div class="card">
+    <div id="timeline-flow"></div>
+</div>
+
+<!-- ===== Model Cards ===== -->
+<h2>Explore Each Model</h2>
+
+<div class="card-grid">
+    <a href="/s4" style="text-decoration:none">
+        <div class="card model-card">
+            <div class="card-header">
+                <div class="icon blue">S4</div>
+                <div>
+                    <h3>S4: Structured State Spaces</h3>
+                    <div class="year">Gu, Goel, Re &middot; 2021 &middot; arXiv:2111.00396</div>
+                </div>
+            </div>
+            <p>The foundation: a continuous-time state space model with the HiPPO matrix, made efficient via NPLR decomposition and FFT-based convolution.</p>
+            <div class="arrow">Explore S4 &#10132;</div>
+        </div>
+    </a>
+
+    <a href="/mamba1" style="text-decoration:none">
+        <div class="card model-card">
+            <div class="card-header">
+                <div class="icon green">M1</div>
+                <div>
+                    <h3>Mamba-1: Selective State Spaces</h3>
+                    <div class="year">Gu, Dao &middot; 2023 &middot; arXiv:2312.00752</div>
+                </div>
+            </div>
+            <p>Makes S4 <em>input-dependent</em>: parameters B, C, and &Delta; are functions of the input, enabling content-aware filtering with a hardware-aware scan.</p>
+            <div class="arrow">Explore Mamba-1 &#10132;</div>
+        </div>
+    </a>
+
+    <a href="/mamba2" style="text-decoration:none">
+        <div class="card model-card">
+            <div class="card-header">
+                <div class="icon purple">M2</div>
+                <div>
+                    <h3>Mamba-2: State Space Duality</h3>
+                    <div class="year">Dao, Gu &middot; 2024 &middot; arXiv:2405.21060</div>
+                </div>
+            </div>
+            <p>Reveals that SSMs and attention are <em>dual</em> views of the same computation via semiseparable matrices, enabling 2&ndash;8&times; speedups with chunked matmul.</p>
+            <div class="arrow">Explore Mamba-2 &#10132;</div>
+        </div>
+    </a>
+
+    <a href="/delta" style="text-decoration:none">
+        <div class="card model-card">
+            <div class="card-header">
+                <div class="icon orange">&Delta;</div>
+                <div>
+                    <h3>DeltaNet: Delta Rule Attention</h3>
+                    <div class="year">Schlag et al. 2021 &middot; Yang et al. 2024</div>
+                </div>
+            </div>
+            <p>Fixes the fundamental flaw of linear attention: instead of blindly accumulating associations, it <em>erases the old value before writing the new one</em>.</p>
+            <div class="arrow">Explore DeltaNet &#10132;</div>
+        </div>
+    </a>
+</div>
+
+<!-- ===== Key Concepts ===== -->
+<h2>Key Concepts You Need First</h2>
+
+<div class="card-grid">
+    <div class="card">
+        <h3>State Space Model (SSM)</h3>
+        <p>A system that maps an input sequence $u(t)$ to output $y(t)$ through a hidden state $x(t)$:</p>
+        <div class="formula-block">
+            $$x'(t) = Ax(t) + Bu(t) \quad \text{(state update)}$$
+            $$y(t) = Cx(t) + Du(t) \quad \text{(output)}$$
+        </div>
+        <p>Think of $x$ as a compressed summary of the input history. $A$ controls how the state evolves, $B$ how input enters, $C$ how output is read.</p>
+    </div>
+
+    <div class="card">
+        <h3>Discretization</h3>
+        <p>Real sequences are discrete (token-by-token), so we discretize with step size $\Delta$:</p>
+        <div class="formula-block">
+            $$\bar{A} = (I - \tfrac{\Delta}{2}A)^{-1}(I + \tfrac{\Delta}{2}A) \quad \text{(bilinear)}$$
+            $$\bar{B} = (I - \tfrac{\Delta}{2}A)^{-1} \Delta B$$
+        </div>
+        <p>This converts the continuous system into a recurrence: $x_k = \bar{A}x_{k-1} + \bar{B}u_k$.</p>
+    </div>
+
+    <div class="card">
+        <h3>Recurrence vs Convolution</h3>
+        <p>The same SSM can be computed two ways:</p>
+        <div class="formula-block">
+            $$\textbf{Recurrent:} \quad x_k = \bar{A}x_{k-1} + \bar{B}u_k, \quad y_k = \bar{C}x_k$$
+        </div>
+        <div class="formula-block">
+            $$\textbf{Convolution:} \quad \bar{K} = (\bar{C}\bar{B},\; \bar{C}\bar{A}\bar{B},\; \ldots,\; \bar{C}\bar{A}^{L-1}\bar{B})$$
+            $$y = \bar{K} * u \quad \text{(computed via FFT in } O(L\log L) \text{)}$$
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>Linear Attention</h3>
+        <p>Replace softmax attention with a kernel trick. Instead of $\text{softmax}(QK^\top)V$:</p>
+        <div class="formula-block">
+            $$y_t = \frac{\sum_{s \le t} \phi(q_t)^\top \phi(k_s) \cdot v_s}{\sum_{s \le t} \phi(q_t)^\top \phi(k_s)}$$
+        </div>
+        <p>With $\phi = \text{identity}$, this becomes recurrent: maintain state $S_t = S_{t-1} + v_t k_t^\top$ and read $y_t = S_t q_t$. This is $O(T)$ but has no forgetting mechanism.</p>
+    </div>
+</div>
+
+<div class="section-divider"></div>
+<p style="text-align:center;color:var(--text-muted);font-size:0.85rem">
+    Built for learning. All formulas reference the original papers. Use the navigation above to dive deep into each model.
+</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    renderFlowDiagram('timeline-flow', [
+        {name: 'HiPPO', shape: '2020'},
+        {name: 'S4', shape: '2021'},
+        {name: 'S4D / S5', shape: '2022'},
+        {name: 'Mamba-1', shape: '2023'},
+        {name: 'Mamba-2', shape: '2024'},
+        {name: 'DeltaNet', shape: '2024'},
+    ]);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block title %}DeltaNet - Delta Rule Linear Attention{% endblock %}
+
+{% block content %}
+<h1>DeltaNet: Delta Rule Linear Attention</h1>
+<p class="subtitle">
+    Linear Transformers Are Secretly Fast Weight Programmers (Schlag et al., 2021, arXiv:2102.11174)<br>
+    Gated Delta Networks: Improving Mamba2 with Delta Rule (Yang et al., 2024)<br>
+</p>
+
+<!-- ===== Section 1: The Problem ===== -->
+<h2>1. The Problem with Standard Linear Attention</h2>
+<div class="card">
+    <p>Standard linear attention maintains a memory matrix $S_t$ that accumulates key-value associations:</p>
+
+    <div class="formula-block">
+        <span class="label">Standard Linear Attention (Recurrent Form)</span>
+        $$S_t = S_{t-1} + v_t \otimes k_t \qquad \text{(write: add new association)}$$
+        $$y_t = S_t \cdot q_t \qquad \text{(read: retrieve by query)}$$
+    </div>
+
+    <p>Where $S_t \in \mathbb{R}^{d_v \times d}$ is a <strong>memory matrix</strong> (like an associative memory / fast weight matrix), $v_t \otimes k_t$ is the outer product storing "key $k_t$ maps to value $v_t$".</p>
+
+    <div class="callout warning">
+        <strong>The fatal flaw:</strong> This memory <em>only accumulates</em> &mdash; it never removes old associations. If key $k$ first maps to value $v_1$ and later should map to $v_2$, the memory contains <em>both</em> $v_1$ and $v_2$, causing interference. Standard attention doesn't have this problem because softmax can shift focus away from old tokens.
+    </div>
+
+    <h3>Why This Matters: A Concrete Example</h3>
+    <div class="card" style="background:var(--bg-code)">
+        <p style="font-family:var(--font-mono);font-size:0.85rem">
+            Token 1: store("name" &rarr; "Alice")<br>
+            Token 2: store("role" &rarr; "engineer")<br>
+            Token 3: store("name" &rarr; "Bob") &larr; <span style="color:var(--accent-orange)">update!</span><br>
+            Token 4: retrieve("name") &rarr; ???
+        </p>
+        <p>
+            <strong>Standard linear attention:</strong> Returns a blend of "Alice" + "Bob" (interference!)<br>
+            <strong>Delta rule:</strong> Returns "Bob" (correctly updated)
+        </p>
+    </div>
+</div>
+
+<!-- ===== Section 2: The Delta Rule ===== -->
+<h2>2. The Delta Rule: Erase Before Write</h2>
+<div class="card">
+    <p>The delta rule fixes this by computing the <strong>difference</strong> between the new value and what's currently stored, then writing only the difference:</p>
+
+    <div class="formula-block">
+        <span class="label">Delta Rule Update</span>
+        $$\underbrace{S_{t-1} \cdot k_t}_{\text{retrieve old value}} \quad \rightarrow \quad \underbrace{v_t - S_{t-1} \cdot k_t}_{\text{delta (new - old)}} \quad \rightarrow \quad S_t = S_{t-1} + \beta_t \cdot (v_t - S_{t-1} k_t) \otimes k_t$$
+    </div>
+
+    <p>Equivalently, this can be written as:</p>
+
+    <div class="formula-block">
+        <span class="label">Matrix Form</span>
+        $$S_t = \underbrace{(I - \beta_t \cdot k_t k_t^\top)}_{\text{erase old association}} \cdot S_{t-1} + \underbrace{\beta_t \cdot v_t \otimes k_t}_{\text{write new association}}$$
+    </div>
+
+    <div style="margin:1.5rem 0">
+        <span class="shape-badge">$S_t$</span> $\in \mathbb{R}^{d_v \times d}$ &mdash; memory matrix<br>
+        <span class="shape-badge green">$k_t$</span> $\in \mathbb{R}^{d}$ &mdash; key (normalized)<br>
+        <span class="shape-badge purple">$v_t$</span> $\in \mathbb{R}^{d_v}$ &mdash; value<br>
+        <span class="shape-badge orange">$q_t$</span> $\in \mathbb{R}^{d}$ &mdash; query<br>
+        <span class="shape-badge">$\beta_t$</span> $\in [0, 1]$ &mdash; learning rate (input-dependent)
+    </div>
+
+    <div class="code-block">
+        <span class="lang-label">PyTorch-like</span>
+<pre><span class="kw">def</span> <span class="fn">delta_rule_attention</span>(Q, K, V, beta):
+    <span class="cm"># Q: (T, d), K: (T, d), V: (T, d_v), beta: (T,)</span>
+    <span class="cm"># S: (d_v, d) memory matrix</span>
+    S = torch.zeros(d_v, d)
+    outputs = []
+
+    <span class="kw">for</span> t <span class="kw">in</span> range(T):
+        <span class="cm"># Step 1: Retrieve what's currently stored for key k_t</span>
+        retrieved = S <span class="op">@</span> K[t]              <span class="cm"># (d_v,)</span>
+
+        <span class="cm"># Step 2: Compute delta = new_value - old_value</span>
+        delta = V[t] <span class="op">-</span> retrieved            <span class="cm"># (d_v,)</span>
+
+        <span class="cm"># Step 3: Update memory (erase-then-write)</span>
+        S = S <span class="op">+</span> beta[t] <span class="op">*</span> torch.outer(delta, K[t])  <span class="cm"># (d_v, d)</span>
+
+        <span class="cm"># Step 4: Read with query</span>
+        y_t = S <span class="op">@</span> Q[t]                    <span class="cm"># (d_v,)</span>
+        outputs.append(y_t)
+
+    <span class="kw">return</span> torch.stack(outputs)        <span class="cm"># (T, d_v)</span>
+</pre>
+    </div>
+
+    <div class="callout insight">
+        <strong>Interpretation:</strong> $\beta_t$ is a "learning rate" for the memory. With $\beta = 1$, the memory perfectly overwrites old values. With $\beta = 0$, no update happens. The model learns when to update aggressively vs. conservatively.
+    </div>
+</div>
+
+<!-- ===== Section 3: Code Execution Walkthrough ===== -->
+<h2>3. Code Execution Walkthrough</h2>
+<div class="card">
+    <p>Step through the delta rule <strong>line by line</strong>. Watch the memory matrix get updated with erase-then-write at each step.</p>
+    <div id="delta-executor"></div>
+</div>
+
+<!-- ===== Section 3b: Step-by-Step Summary ===== -->
+<h2>3b. Step-by-Step Summary</h2>
+<div class="card">
+    <div id="delta-stepper"></div>
+</div>
+
+<!-- ===== Section 4: Comparison ===== -->
+<h2>4. Comparing All Three Approaches</h2>
+<div class="card">
+    <div id="tabs-compare" class="tab-group">
+        <button class="tab-btn active" data-tab="tab-outputs">Output Comparison</button>
+        <button class="tab-btn" data-tab="tab-memory">Memory State Evolution</button>
+    </div>
+
+    <div id="tab-outputs" class="tab-content active">
+        <div id="output-comparison-plot" class="plot-container"></div>
+    </div>
+
+    <div id="tab-memory" class="tab-content">
+        <h3>Standard Linear Attention Memory</h3>
+        <div id="memory-linear-stepper"></div>
+
+        <h3 style="margin-top:2rem">Delta Rule Memory</h3>
+        <div id="memory-delta-stepper"></div>
+    </div>
+</div>
+
+<!-- ===== Section 5: Why Delta Rule Works ===== -->
+<h2>5. Why the Delta Rule Works: Mathematical Intuition</h2>
+<div class="card">
+    <p>Consider the case where keys are orthonormal ($k_i^\top k_j = \delta_{ij}$) and $\beta = 1$:</p>
+
+    <div class="formula-block">
+        $$S_t k_t = (S_{t-1} + (v_t - S_{t-1}k_t) k_t^\top) k_t = S_{t-1}k_t + v_t - S_{t-1}k_t = v_t$$
+    </div>
+
+    <p>After the update, retrieving with the same key gives <em>exactly</em> the new value $v_t$, with the old value completely erased. For non-orthogonal keys, the update is approximate but still much better than pure accumulation.</p>
+
+    <div class="formula-block">
+        <span class="label">Connection to Linear Regression</span>
+        $$\text{Delta rule} \iff \text{Online gradient descent on } \min_S \sum_t \|v_t - S k_t\|^2$$
+    </div>
+
+    <p>The delta update $S_t = S_{t-1} + \beta_t (v_t - S_{t-1}k_t) k_t^\top$ is exactly the gradient step for minimizing the squared error between the stored value $Sk_t$ and the target $v_t$.</p>
+</div>
+
+<!-- ===== Section 6: Comparison Table ===== -->
+<h2>6. Summary Comparison</h2>
+<div class="card">
+    <table class="compare-table">
+        <thead>
+            <tr><th>Property</th><th>Softmax Attention</th><th>Linear Attention</th><th>Delta Rule</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Update Rule</strong></td>
+                <td>Full recomputation</td>
+                <td>$S_t = S_{t-1} + v_t k_t^\top$</td>
+                <td>$S_t = S_{t-1} + \beta(v_t - S_{t-1}k_t)k_t^\top$</td>
+            </tr>
+            <tr>
+                <td><strong>Can Forget?</strong></td>
+                <td>Yes (softmax shifts)</td>
+                <td>No (only adds)</td>
+                <td>Yes (erase then write)</td>
+            </tr>
+            <tr>
+                <td><strong>Memory</strong></td>
+                <td>$O(T)$ KV cache</td>
+                <td>$O(d^2)$ fixed</td>
+                <td>$O(d^2)$ fixed</td>
+            </tr>
+            <tr>
+                <td><strong>Per-token cost</strong></td>
+                <td>$O(T \cdot d)$</td>
+                <td>$O(d^2)$</td>
+                <td>$O(d^2)$</td>
+            </tr>
+            <tr>
+                <td><strong>Associative recall</strong></td>
+                <td>Excellent</td>
+                <td>Poor (interference)</td>
+                <td>Good (delta correction)</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const demo = {{ demo|safe }};
+const execSteps = {{ exec_steps|safe }};
+
+document.addEventListener('DOMContentLoaded', () => {
+    initTabs('tabs-compare');
+    new CodeExecutor('delta-executor', execSteps);
+
+    // Delta rule step-by-step
+    const steps = demo.deltas.map((d, t) => ({
+        title: `t=${t}: Delta rule update`,
+        description:
+            `Retrieved old value: [${d.retrieved.map(v => v.toFixed(3)).join(', ')}]. ` +
+            `New value v_${t}: [${d.new_value.map(v => v.toFixed(3)).join(', ')}]. ` +
+            `Delta (new - old): [${d.delta.map(v => v.toFixed(3)).join(', ')}]. ` +
+            `Beta: ${d.beta.toFixed(2)}.`,
+        render: (div) => {
+            // Show memory matrix
+            const id = `delta-mem-${t}`;
+            const el = document.createElement('div');
+            el.id = id;
+            div.appendChild(el);
+            renderMatrix(id, demo.states_delta[t],
+                `Memory S_${t} (d_v=${demo.d_v}, d=${demo.d})`);
+
+            // Show delta visualization
+            const barDiv = document.createElement('div');
+            barDiv.style.marginTop = '1rem';
+            barDiv.id = `delta-bar-${t}`;
+            div.appendChild(barDiv);
+
+            const traces = [
+                {y: d.retrieved, name: 'Retrieved (old)', x: Array.from({length: demo.d_v}, (_, i) => `dim ${i}`)},
+                {y: d.new_value, name: 'New value v_t', x: Array.from({length: demo.d_v}, (_, i) => `dim ${i}`)},
+                {y: d.delta, name: 'Delta (new-old)', x: Array.from({length: demo.d_v}, (_, i) => `dim ${i}`)},
+            ];
+            plotLines(barDiv.id, traces, `Step ${t}: Retrieved vs New vs Delta`, 'Dimension', 'Value');
+        }
+    }));
+    stepAnimators['delta-stepper'] = new StepAnimator('delta-stepper', steps);
+
+    // Output comparison
+    const traces = [];
+    for (let dv = 0; dv < Math.min(demo.d_v, 2); dv++) {
+        traces.push({y: demo.Y_softmax.map(r => r[dv]), name: `Softmax d_v=${dv}`});
+        traces.push({y: demo.Y_linear.map(r => r[dv]), name: `Linear d_v=${dv}`});
+        traces.push({y: demo.Y_delta.map(r => r[dv]), name: `Delta d_v=${dv}`});
+    }
+    plotLines('output-comparison-plot', traces,
+        'Output Comparison: Softmax vs Linear vs Delta Rule', 'Time step', 'Output value');
+
+    // Memory state steppers
+    const linearMemSteps = demo.states_linear.map((s, t) => ({
+        title: `t=${t}: Linear attention memory (only accumulates)`,
+        description: `S_${t} = S_${t > 0 ? t-1 : 0} + v_${t} ⊗ k_${t}. Note: values only grow, never shrink.`,
+        render: (div) => {
+            const id = `lin-mem-${t}`;
+            const el = document.createElement('div');
+            el.id = id;
+            div.appendChild(el);
+            renderMatrix(id, s, `S_${t} linear (${demo.d_v}×${demo.d})`);
+        }
+    }));
+    stepAnimators['memory-linear-stepper'] = new StepAnimator('memory-linear-stepper', linearMemSteps);
+
+    const deltaMemSteps = demo.states_delta.map((s, t) => ({
+        title: `t=${t}: Delta rule memory (erase-then-write)`,
+        description: `S_${t} = (I - β·k_${t}k_${t}ᵀ)·S_${t > 0 ? t-1 : 0} + β·v_${t}⊗k_${t}. Old associations are erased before new ones are written.`,
+        render: (div) => {
+            const id = `del-mem-${t}`;
+            const el = document.createElement('div');
+            el.id = id;
+            div.appendChild(el);
+            renderMatrix(id, s, `S_${t} delta (${demo.d_v}×${demo.d})`);
+        }
+    }));
+    stepAnimators['memory-delta-stepper'] = new StepAnimator('memory-delta-stepper', deltaMemSteps);
+});
+</script>
+{% endblock %}

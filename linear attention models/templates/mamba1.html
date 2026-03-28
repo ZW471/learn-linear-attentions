@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block title %}Mamba-1 - Selective State Spaces{% endblock %}
+
+{% block content %}
+<h1>Mamba-1: Selective State Spaces</h1>
+<p class="subtitle">
+    Linear-Time Sequence Modeling with Selective State Spaces<br>
+    <span style="color:var(--text-muted)">Gu, Dao &middot; 2023 &middot; arXiv:2312.00752</span>
+</p>
+
+<!-- ===== Section 1: Key Innovation ===== -->
+<h2>1. The Problem with S4: No Selectivity</h2>
+<div class="card">
+    <p>S4's parameters ($A$, $B$, $C$) are <strong>fixed after training</strong> &mdash; they don't change based on the input. This means S4 treats every token the same way, regardless of content.</p>
+
+    <div class="callout warning">
+        <strong>The limitation:</strong> Consider processing "The cat sat on the mat <strong>[IMPORTANT]</strong> The key fact is...". S4 cannot selectively attend more to tokens after [IMPORTANT] because its dynamics are input-independent.
+    </div>
+
+    <p>Mamba's solution: make $B$, $C$, and $\Delta$ <strong>functions of the input</strong>.</p>
+
+    <div class="card-grid">
+        <div class="card" style="margin-bottom:0">
+            <h3 style="color:var(--accent-red)">S4 (Time-Invariant)</h3>
+            <div class="formula-block">
+                $$x_k = \bar{A}x_{k-1} + \bar{B}u_k$$
+                $$\bar{A}, \bar{B} \text{ are the same at every step}$$
+            </div>
+        </div>
+        <div class="card" style="margin-bottom:0">
+            <h3 style="color:var(--accent-green)">Mamba (Selective / Time-Varying)</h3>
+            <div class="formula-block">
+                $$x_k = \bar{A}_k x_{k-1} + \bar{B}_k u_k$$
+                $$\bar{A}_k, \bar{B}_k \text{ depend on } u_k$$
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== Section 2: Selective Mechanism ===== -->
+<h2>2. The Selection Mechanism</h2>
+<div class="card">
+    <p>Mamba generates $B_t$, $C_t$, and $\Delta_t$ as <strong>linear projections of the input</strong>:</p>
+
+    <div class="formula-block">
+        <span class="label">Input-Dependent Parameters</span>
+        $$B_t = s_B(x_t) = \text{Linear}_N(x_t) \quad \in \mathbb{R}^N$$
+        $$C_t = s_C(x_t) = \text{Linear}_N(x_t) \quad \in \mathbb{R}^N$$
+        $$\Delta_t = \text{softplus}(s_\Delta(x_t)) = \text{softplus}(\text{Linear}_1(x_t)) \quad \in \mathbb{R}^+$$
+    </div>
+
+    <p>Then discretization happens <strong>per timestep</strong> using Zero-Order Hold (ZOH):</p>
+
+    <div class="formula-block">
+        <span class="label">Per-Timestep Discretization (ZOH)</span>
+        $$\bar{A}_t = \exp(\Delta_t \cdot A) \qquad \bar{B}_t \approx \Delta_t \cdot B_t$$
+    </div>
+
+    <div class="callout insight">
+        <strong>Intuition for $\Delta$:</strong> The step size $\Delta_t$ controls how much the model "pays attention" to token $t$. Large $\Delta_t$ &rarr; the state changes a lot (remember this token). Small $\Delta_t$ &rarr; the state barely changes (ignore this token). $\Delta$ is the selection mechanism.
+    </div>
+
+    <h3>Tensor Shapes</h3>
+    <div style="margin:1rem 0">
+        <span class="shape-badge">u</span> $(B, L, D)$ &mdash; input (batch, length, model dim)<br>
+        <span class="shape-badge green">A</span> $(D, N)$ &mdash; diagonal state matrix (shared, learned)<br>
+        <span class="shape-badge purple">B_t</span> $(B, L, N)$ &mdash; input-dependent input projection<br>
+        <span class="shape-badge orange">C_t</span> $(B, L, N)$ &mdash; input-dependent output projection<br>
+        <span class="shape-badge">$\Delta_t$</span> $(B, L, D)$ &mdash; input-dependent step sizes<br>
+        <span class="shape-badge green">x</span> $(B, D, N)$ &mdash; hidden state
+    </div>
+</div>
+
+<!-- ===== Section 3: Selective Scan ===== -->
+<h2>3. The Selective Scan Algorithm</h2>
+<div class="card">
+    <p>Because $\bar{A}_t$ and $\bar{B}_t$ now change at every step, we can no longer use convolutions. Instead, Mamba uses a <strong>parallel scan</strong>.</p>
+
+    <div class="formula-block">
+        <span class="label">Selective Scan (per feature d)</span>
+        $$x_t = \bar{A}_t \odot x_{t-1} + \bar{B}_t \odot u_t \qquad \in \mathbb{R}^{(D, N)}$$
+        $$y_t = \sum_n x_{t,d,n} \cdot C_{t,n} \qquad \in \mathbb{R}^{D}$$
+    </div>
+
+    <div class="code-block">
+        <span class="lang-label">PyTorch-like</span>
+<pre><span class="cm"># Selective scan (simplified, single batch)</span>
+<span class="kw">def</span> <span class="fn">selective_scan</span>(u, A, B, C, delta):
+    <span class="cm"># u: (L, D), A: (D, N), B: (L, N), C: (L, N), delta: (L, D)</span>
+    L, D = u.shape
+    N = A.shape[<span class="num">1</span>]
+    x = torch.zeros(D, N)           <span class="cm"># hidden state (D, N)</span>
+    outputs = []
+
+    <span class="kw">for</span> t <span class="kw">in</span> range(L):
+        <span class="cm"># Step 1: Discretize (per-timestep!)</span>
+        A_bar = torch.exp(delta[t, :, None] <span class="op">*</span> A)  <span class="cm"># (D, N)</span>
+        B_bar = delta[t, :, None] <span class="op">*</span> B[t, None, :]   <span class="cm"># (D, N)</span>
+
+        <span class="cm"># Step 2: State update</span>
+        x = A_bar <span class="op">*</span> x <span class="op">+</span> B_bar <span class="op">*</span> u[t, :, None]       <span class="cm"># (D, N)</span>
+
+        <span class="cm"># Step 3: Output</span>
+        y_t = (x <span class="op">*</span> C[t, None, :]).sum(dim=<span class="op">-</span><span class="num">1</span>)       <span class="cm"># (D,)</span>
+        outputs.append(y_t)
+
+    <span class="kw">return</span> torch.stack(outputs)      <span class="cm"># (L, D)</span>
+</pre>
+    </div>
+
+    <h3>Step-by-Step Selective Scan</h3>
+    <div id="scan-stepper"></div>
+</div>
+
+<!-- ===== Section 3b: Code Execution Walkthrough ===== -->
+<h2>3b. Code Execution Walkthrough</h2>
+<div class="card">
+    <p>Step through the selective scan <strong>line by line</strong>. Watch how input-dependent parameters change at each timestep.</p>
+    <div id="mamba1-executor"></div>
+</div>
+
+<!-- ===== Section 4: Hardware-Aware Algorithm ===== -->
+<h2>4. Hardware-Aware Implementation</h2>
+<div class="card">
+    <p>The naive scan above would materialize the full state tensor $(B, L, D, N)$ in GPU HBM (slow memory). Mamba avoids this with <strong>kernel fusion</strong>:</p>
+
+    <div class="card-grid">
+        <div class="card" style="margin-bottom:0">
+            <h3>GPU Memory Hierarchy</h3>
+            <div style="font-family:var(--font-mono);font-size:0.85rem;line-height:2">
+                <div style="padding:0.5rem;background:rgba(74,222,128,0.1);border-radius:4px;margin-bottom:0.5rem">
+                    <strong style="color:var(--accent-green)">SRAM</strong> (on-chip): ~20 MB, ~19 TB/s<br>
+                    <span style="color:var(--text-muted)">Fused kernel keeps state here</span>
+                </div>
+                <div style="padding:0.5rem;background:rgba(251,146,60,0.1);border-radius:4px">
+                    <strong style="color:var(--accent-orange)">HBM</strong> (off-chip): ~80 GB, ~2 TB/s<br>
+                    <span style="color:var(--text-muted)">Only reads input, writes output</span>
+                </div>
+            </div>
+        </div>
+        <div class="card" style="margin-bottom:0">
+            <h3>Fused Operations</h3>
+            <p>Three operations fused into <strong>one CUDA kernel</strong>:</p>
+            <ol style="color:var(--text-secondary);padding-left:1.5rem">
+                <li>Discretization: $\Delta_t, A \rightarrow \bar{A}_t, \bar{B}_t$</li>
+                <li>Selective scan: $x_t = \bar{A}_t x_{t-1} + \bar{B}_t u_t$</li>
+                <li>Output: $y_t = C_t^\top x_t$</li>
+            </ol>
+            <p>The state $(D, N)$ stays in SRAM the entire time &mdash; never written to HBM.</p>
+        </div>
+    </div>
+</div>
+
+<!-- ===== Section 5: Mamba Block ===== -->
+<h2>5. The Mamba Block Architecture</h2>
+<div class="card">
+    <p>One Mamba block (replacing a Transformer block):</p>
+    <div id="mamba-block-flow"></div>
+
+    <div class="code-block">
+        <span class="lang-label">PyTorch-like</span>
+<pre><span class="kw">class</span> <span class="type">MambaBlock</span>(nn.Module):
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, D, N=<span class="num">16</span>, expand=<span class="num">2</span>):
+        E = D <span class="op">*</span> expand
+        self.in_proj  = nn.Linear(D, <span class="num">2</span> <span class="op">*</span> E)     <span class="cm"># (D) -> (2E) split into x, z</span>
+        self.conv1d   = nn.Conv1d(E, E, <span class="num">4</span>, groups=E, padding=<span class="num">3</span>)
+        self.ssm_proj = nn.Linear(E, N<span class="op">+</span>N<span class="op">+</span><span class="num">1</span>)     <span class="cm"># -> B(N), C(N), delta(1)</span>
+        self.A_log    = nn.Parameter(...)          <span class="cm"># (E, N) learned</span>
+        self.out_proj = nn.Linear(E, D)
+
+    <span class="kw">def</span> <span class="fn">forward</span>(self, u):                         <span class="cm"># u: (B, L, D)</span>
+        xz = self.in_proj(u)                       <span class="cm"># (B, L, 2E)</span>
+        x, z = xz.chunk(<span class="num">2</span>, dim=<span class="op">-</span><span class="num">1</span>)                 <span class="cm"># each (B, L, E)</span>
+        x = self.conv1d(x.transpose(<span class="num">1</span>,<span class="num">2</span>)).transpose(<span class="num">1</span>,<span class="num">2</span>)
+        x = F.silu(x)                              <span class="cm"># (B, L, E)</span>
+
+        <span class="cm"># Input-dependent SSM parameters</span>
+        ssm_params = self.ssm_proj(x)              <span class="cm"># (B, L, 2N+1)</span>
+        B, C, dt = split(ssm_params)               <span class="cm"># B,C:(B,L,N) dt:(B,L,1)</span>
+        A = <span class="op">-</span>torch.exp(self.A_log)                 <span class="cm"># (E, N)</span>
+
+        y = selective_scan(x, A, B, C, dt)          <span class="cm"># (B, L, E)</span>
+        y = y <span class="op">*</span> F.silu(z)                            <span class="cm"># gating</span>
+        <span class="kw">return</span> self.out_proj(y)                     <span class="cm"># (B, L, D)</span>
+</pre>
+    </div>
+</div>
+
+<!-- ===== Section 6: Interactive Demo ===== -->
+<h2>6. Interactive Demo: Selectivity in Action</h2>
+<div class="card">
+    <p>Watch how different input tokens produce different $\bar{A}_t$ (decay rates). High $\Delta$ means "remember this token", low $\Delta$ means "skip it".</p>
+
+    <h3>Input-Dependent Step Sizes $\Delta_t$</h3>
+    <div id="delta-heatmap" class="plot-container"></div>
+
+    <h3>Effective Decay $\bar{A}_t = \exp(\Delta_t \cdot A)$</h3>
+    <div id="abar-heatmap" class="plot-container"></div>
+
+    <h3>Hidden State Evolution</h3>
+    <div id="state-heatmap" class="plot-container"></div>
+
+    <h3>Input vs Output</h3>
+    <div id="io-plot" class="plot-container"></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const demo = {{ demo|safe }};
+const blockInfo = {{ block_info|tojson }};
+const execSteps = {{ exec_steps|safe }};
+
+document.addEventListener('DOMContentLoaded', () => {
+    new CodeExecutor('mamba1-executor', execSteps);
+    // Mamba block flow
+    const nodes = blockInfo.layers.map(l => ({
+        name: l.name.split(' ').slice(0,2).join(' '),
+        shape: l.out_shape.replace(/\(.+\)/, s => s.length > 20 ? '(...)' : s)
+    }));
+    renderFlowDiagram('mamba-block-flow', nodes);
+
+    // Step-by-step scan
+    const steps = [];
+    for (let t = 0; t < demo.L; t++) {
+        steps.push({
+            title: `t=${t}: Selective scan step`,
+            description: `Δ[t=${t}] ranges from ${Math.min(...demo.delta[t]).toFixed(3)} to ${Math.max(...demo.delta[t]).toFixed(3)}. ` +
+                `The A_bar decay for this step determines how much of the previous state is retained. ` +
+                `Output y[${t}] = sum(x[t] * C[t]) across N=${demo.N} state dims.`,
+            render: (div) => {
+                if (demo.states[t]) {
+                    const id = `scan-state-${t}`;
+                    const el = document.createElement('div');
+                    el.id = id;
+                    div.appendChild(el);
+                    renderMatrix(id, demo.states[t], `Hidden state x_${t} (D=${demo.D}, N=${demo.N})`);
+                }
+            }
+        });
+    }
+    stepAnimators['scan-stepper'] = new StepAnimator('scan-stepper', steps);
+
+    // Delta heatmap
+    plotHeatmap('delta-heatmap', demo.delta,
+        'Step sizes Δ_t (higher = more attention to this token)',
+        Array.from({length: demo.D}, (_, i) => `d=${i}`),
+        Array.from({length: demo.L}, (_, i) => `t=${i}`)
+    );
+
+    // A_bar heatmap
+    plotHeatmap('abar-heatmap', demo.A_bars,
+        'Ā_t = exp(Δ_t · A) — Decay rates (closer to 1 = more memory retention)',
+        Array.from({length: demo.N}, (_, i) => `n=${i}`),
+        Array.from({length: demo.L}, (_, i) => `t=${i}`)
+    );
+
+    // State evolution
+    const stateForPlot = demo.states.map(s => s[0]); // first D channel
+    plotHeatmap('state-heatmap', stateForPlot,
+        'Hidden state x_t[d=0,:] over time (first feature channel)',
+        Array.from({length: demo.N}, (_, i) => `n=${i}`),
+        Array.from({length: demo.L}, (_, i) => `t=${i}`)
+    );
+
+    // IO plot
+    const traces = [];
+    for (let d = 0; d < Math.min(demo.D, 3); d++) {
+        traces.push({y: demo.input_u.map(row => row[d]), name: `Input u[:,${d}]`});
+        traces.push({y: demo.output_y.map(row => row[d]), name: `Output y[:,${d}]`});
+    }
+    plotLines('io-plot', traces, 'Input vs Output (first 3 channels)', 'Time step', 'Value');
+});
+</script>
+{% endblock %}
