@@ -280,14 +280,41 @@ function makeBtn(html, onclick, className) {
 }
 
 function highlightSyntax(code) {
-    return code
-        .replace(/\b(def|class|for|in|if|else|return|import|from|as|None|True|False)\b/g, '<span class="hl-kw">$1</span>')
+    // Extract strings and comments first to avoid corrupting HTML attributes later
+    const strings = [];
+    const comments = [];
+
+    // Pull out strings (before any HTML is added)
+    let s = code.replace(/(".*?"|'.*?')/g, (m) => {
+        strings.push(m);
+        return `__STR${strings.length - 1}__`;
+    });
+
+    // Pull out comments
+    s = s.replace(/(#.*$)/gm, (m) => {
+        comments.push(m);
+        return `__COM${comments.length - 1}__`;
+    });
+
+    // Now safe to add HTML spans - no quotes to interfere
+    s = s
+        .replace(/\b(def|class|for|in|if|else|elif|return|import|from|as|None|True|False)\b/g, '<span class="hl-kw">$1</span>')
         .replace(/\b(torch|np|nn|F)\b/g, '<span class="hl-mod">$1</span>')
-        .replace(/\b(zeros|ones|eye|exp|randn|softplus|sigmoid|outer|sum|matmul)\b/g, '<span class="hl-fn">$1</span>')
-        .replace(/(#.*$)/gm, '<span class="hl-cm">$1</span>')
+        .replace(/\b(zeros|ones|eye|exp|randn|softplus|sigmoid|outer|sum|matmul|mv|stack|Tensor|squeeze)\b/g, '<span class="hl-fn">$1</span>')
         .replace(/\b(\d+\.?\d*)\b/g, '<span class="hl-num">$1</span>')
-        .replace(/(@)/g, '<span class="hl-op">$1</span>')
-        .replace(/(".*?"|'.*?')/g, '<span class="hl-str">$1</span>');
+        .replace(/(@)/g, '<span class="hl-op">$1</span>');
+
+    // Restore comments (wrapped in comment span)
+    comments.forEach((c, i) => {
+        s = s.replace(`__COM${i}__`, `<span class="hl-cm">${c}</span>`);
+    });
+
+    // Restore strings (wrapped in string span)
+    strings.forEach((str, i) => {
+        s = s.replace(`__STR${i}__`, `<span class="hl-str">${str}</span>`);
+    });
+
+    return s;
 }
 
 function renderSmallMatrix(matrix, highlightCell, color) {
