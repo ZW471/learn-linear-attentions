@@ -1,0 +1,124 @@
+redirectsOrigin = "config"
+plugins = []
+headers = []
+
+[functions]
+
+[functions."*"]
+
+[build]
+publish = "/Users/dricpro/PycharmProjects/learn_models/_site"
+publishOrigin = "config"
+commandOrigin = "config"
+command = "pip install flask numpy && python build.py"
+
+[build.environment]
+PYTHON_VERSION = "3.12"
+
+[build.processing]
+
+[build.processing.css]
+
+[build.processing.html]
+
+[build.processing.images]
+
+[build.processing.js]
+
+[build.services]
+
+[[redirects]]
+from = "/s4"
+to = "/s4.html"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/mamba1"
+to = "/mamba1.html"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/mamba2"
+to = "/mamba2.html"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/delta"
+to = "/delta.html"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/api/s4/:N/:L"
+to = "/api/s4/:N/:L.json"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/api/mamba1/:L/:D/:N"
+to = "/api/mamba1/:L/:D/:N.json"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/api/mamba2/:T/:N/:P"
+to = "/api/mamba2/:T/:N/:P.json"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
+
+[[redirects]]
+from = "/api/delta/:T/:d/:dv"
+to = "/api/delta/:T/:d/:dv.json"
+status = 200.0
+force = false
+
+[redirects.query]
+
+[redirects.conditions]
+
+[redirects.headers]
